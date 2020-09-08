@@ -894,8 +894,10 @@ if __name__ == "__main__":
     # === Define the training and dev data
 
     train_bags = joblib.load(config_obj.bag_file)
-    dev_bags   = joblib.load(config_obj.bag_file)
-    test_bags  = joblib.load(config_obj.bag_file)
+    #dev_bags   = joblib.load(config_obj.bag_file)
+    #test_bags  = joblib.load(config_obj.bag_file)
+    dev_bags = train_bags
+    test_bags = train_bags
 
     unlabelled_entities = read_entities(config_obj.train_file, start = config_obj.take_frac,end= config_obj.unlabelled_ratio*config_obj.take_frac+config_obj.take_frac)
     dev_entities   = read_entities(config_obj.dev_file)
