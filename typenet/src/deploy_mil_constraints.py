@@ -47,17 +47,23 @@ glogger.setLevel(logging.INFO)
 
 
 def get_cooccuring_matrix(train_file,entity_type_dict,typenet_matrix):
+    """
+
+    """
     train_entities = read_entities(train_file)
     data = set()
     for e in train_entities:
-        data.add(frozenset(entity_type_dict[e]))
+        data.add(frozenset(entity_type_dict[e])) # contains sets of type_ids of types that cooccure as labels
     #
-    coocur = dd_utils.get_cooccur(data)
-    dd_pids, dd_cids = dd_utils.get_parent_child_tensors(typenet_matrix)
-    dd_pids = dd_pids.numpy()
-    dd_cids = dd_cids.numpy()
-    ind = (dd_pids < coocur.shape[0]) & (dd_cids < coocur.shape[0])
-    coocur[dd_pids[ind],dd_cids[ind]] += 1
+    coocur = dd_utils.get_cooccur(data) # a matrix of size max_id x max_id where i,j entry give the cooccurance count of types i and j.
+                                        # not sure why this is not a symmetric matrix. It only makes sense if the value list in entity_type_dict
+                                        # have specific order! TODO: look into this. Might be a bug.
+                                        # Also most likely entity_type_dict has only fb types in values
+    dd_pids, dd_cids = dd_utils.get_parent_child_tensors(typenet_matrix) # row index is considered as parent in the adj matrix. TODO: confirm this
+    dd_pids = dd_pids.numpy() #array of parents
+    dd_cids = dd_cids.numpy() # array of corresponding child
+    ind = (dd_pids < coocur.shape[0]) & (dd_cids < coocur.shape[0]) # only retain fb types in cooccurance 
+    coocur[dd_pids[ind],dd_cids[ind]] += 1 # add one for coocurrance coming from adj matrix 
     coocur[dd_cids[ind],dd_pids[ind]] += 1
     return coocur
 
@@ -191,6 +197,7 @@ def train(model, train_data, dev, test, config, typenet_matrix, constraints, fb_
 
     # ===== Different L2 regularization on the structure weights =====
 
+    # split up parameters into two sets
     base_parameters = []
     struct_parameters = []
     for name, param in model.named_parameters():
@@ -202,12 +209,16 @@ def train(model, train_data, dev, test, config, typenet_matrix, constraints, fb_
             base_parameters.append(param)
 
     if config.struct_weight > 0:
-        optimizer = optim.Adam([{'params': struct_parameters, 'weight_decay' : config.bilinear_l2}, {'params': base_parameters}], lr=config.lr, eps=config.epsilon,
+        optimizer = optim.Adam([
+                {'params': struct_parameters, 'weight_decay' : config.bilinear_l2}, 
+                {'params': base_parameters}
+            ], lr=config.lr, eps=config.epsilon,
                            weight_decay=config.weight_decay, betas=(config.beta1, config.beta2))
     else:
         optimizer = optim.Adam(base_parameters, lr=config.lr, eps=config.epsilon,
                            weight_decay=config.weight_decay, betas=(config.beta1, config.beta2))
    
+    # constrains are instantiated as a separate pytorch module. So lambda params are separate
     dd_param_list = constraints.get_optim_params(config)
     dd_optim = None
     if len(dd_param_list) > 0:
@@ -298,8 +309,8 @@ def train(model, train_data, dev, test, config, typenet_matrix, constraints, fb_
             typing_loss = torch.tensor(0.0)
             if config.gpu:
                 typing_loss = typing_loss.cuda()
-            if ds_id == labelled_id:
-                loss_wts = get_loss_weights(all_tensors['gold_types'], config)
+            if ds_id == labelled_id: # if labelled minibatch
+                loss_wts = get_loss_weights(all_tensors['gold_types'], config)# See BCEWithLogitsLoss, we can have per example and per class weights. Skip in first go.
                 typing_loss = loss_criterion(logit_dict['typing_logits'], all_tensors['gold_types'],loss_wts)
             
             structure_loss = loss_criterion(logit_dict['type_structure_logits'], all_tensors['structure_parents_gold']) if config.struct_weight > 0 else 0.0
@@ -637,7 +648,7 @@ def get_new_typeids(entity_type_dict, orig2new,num_fb_types):
         curr = []
         for type_id in entity_type_dict[ent]:
             new_type_id = orig2new[type_id]
-            if new_type_id < num_fb_types:
+            if new_type_id < num_fb_types:  # add only if fb type
                 curr.append(new_type_id)
 
             #orig_type = orig_idx2type[type_id]
@@ -819,26 +830,33 @@ if __name__ == "__main__":
     assert(config_obj.mode in ['typing', 'linking'])
 
     # === load in all the auxiliary data
-    type_dict = joblib.load(config_obj.type_dict)
-    entity_type_dict = joblib.load(config_obj.entity_type_dict)
-    entity_dict  = joblib.load(config_obj.entity_dict)
+    type_dict = joblib.load(config_obj.type_dict)# type_name: type_id
+    entity_type_dict = joblib.load(config_obj.entity_type_dict) # entity_name: List of types (ids) it belongs to. May or may not include labels due to TC based on use_transitive flag.
+    entity_dict  = joblib.load(config_obj.entity_dict) # entity_name: entity_id
 
-    typenet_matrix_orig = joblib.load(config_obj.typenet_matrix)
-    typenet_adj_matrix_orig = joblib.load(config_obj.typenet_adj_matrix)
+    typenet_matrix_orig = joblib.load(config_obj.typenet_matrix) # adjacency matrix (including transitive closure) size = num_types x num_types
+                                                                 # includes both fb types and WN types
+    typenet_adj_matrix_orig = joblib.load(config_obj.typenet_adj_matrix) # adjacency matrix. Does not include TC edges. size = num_types x num_types
 
-    type_dict, entity_type_dict, fb_type_size,typenet_matrix, typenet_adj_matrix,map_old_to_new = filter_fb_types(type_dict, entity_type_dict, typenet_matrix_orig, typenet_adj_matrix_orig)
+    type_dict, entity_type_dict, fb_type_size,typenet_matrix, typenet_adj_matrix,map_old_to_new = \
+    filter_fb_types(type_dict, entity_type_dict, typenet_matrix_orig, typenet_adj_matrix_orig) # groups and places fb types first obtaining new type id based on the new order 
+                                                                                               # re-indexes type_dict based on new order
+                                                                                               # updates the entity_type_dict to only contain fb types in values (with new ids)
+                                                                                               # updates both the adjacency metrices to respect the new ids (re-ordered)
+                                                                                               # forms an id2id map from original type ids to new type ids (after re-ordering)
     if config_obj.use_transitive:
         entity_type_dict_test = entity_type_dict
     else:
-        logger.info("Not Using Transitive Closure Labels")
-        entity_type_dict_test_orig = joblib.load(config_obj.entity_type_dict_test)
-        entity_type_dict_test = get_new_typeids(entity_type_dict_test_orig,map_old_to_new,fb_type_size)
+        
+        entity_type_dict_test_orig = joblib.load(config_obj.entity_type_dict_test) # D: config.entity_type_dict_test always point to mapping with TC included.
+                                                                                   # D: Hence entity_type_dict_test always has labels due to TC.
+        entity_type_dict_test = get_new_typeids(entity_type_dict_test_orig,map_old_to_new,fb_type_size) # re-index
 
     #typenet_matrix = typenet_matrix_orig 
     #typenet_adj_matrix = typenet_adj_matrix_orig 
    
     
-    vocab_dict = joblib.load(config_obj.vocab_file)
+    vocab_dict = joblib.load(config_obj.vocab_file) # text vocab
     config_obj.vocab_size   = len(vocab_dict)
     config_obj.type_size    = len(type_dict)
     config_obj.entity_size  = len(entity_dict)
@@ -854,10 +872,10 @@ if __name__ == "__main__":
     logger.info("\nNumber of total entities in vocab: %d\n" %config_obj.entity_size)
     logger.info("\nNumber of fb types in vocab: %d\n" %config_obj.fb_type_size)
 
-
-    train_entities = read_entities(config_obj.train_file, end = config_obj.take_frac)
-    cooccur = get_cooccuring_matrix(config_obj.train_file,entity_type_dict,typenet_matrix)
-    typenet_constraints = constraints_module.get_constraints(config_obj,{'cooccur': cooccur, 'adj_matrix': typenet_matrix[:fb_type_size,:fb_type_size]})
+     
+    train_entities = read_entities(config_obj.train_file, end = config_obj.take_frac) # Just a set of entity names
+    cooccur = get_cooccuring_matrix(config_obj.train_file,entity_type_dict,typenet_matrix) # FB part of the joint TC is used
+    typenet_constraints = constraints_module.get_constraints(config_obj,{'cooccur': cooccur, 'adj_matrix': typenet_matrix[:fb_type_size,:fb_type_size]}) # FB part of the joint TC is use
 
     pretrained_embeddings = get_trimmed_glove_vectors(config_obj.embedding_file)
 
@@ -892,8 +910,21 @@ if __name__ == "__main__":
         
 
     # === Define the training and dev data
-
-    train_bags = joblib.load(config_obj.bag_file)
+    # D: 
+    # this is the text sentences for each entity
+    # these are giant! Like 6GB on disk. I don't know why 3 copies are being loaded.
+    train_bags = joblib.load(config_obj.bag_file)# D: read entities to train on. (some fraction of it). Format is 
+                                                                                      # entity_name: list of sentences_dict (untokenized)
+                                                                                      # to see an example do: train_bags['Anna_Hazare'][0]
+                                                                                      # output: 'title:Jail Bharo Andolan\tsfm_slug_Anna_Hazare\te_slug_Anna_Hazare_@en\tIn 
+                                                                                      # the protests for Indian freedom movement Jail Bharo Andolan was used many times by protesters including 
+                                                                                      # <em> Mahatma Gandhi </em>\tSocial activist <em> <target> Anna_Hazare </target> </em> has said the Jail 
+                                                                                      # Bharo Andolan will begin on April 00 if the government fails the <em> Jan Lokpal Bill </em>\tThe 74-year-old 
+                                                                                      # leader who was on a fast-unto-death at the Jantar Mantar in New Delhi from April 0 0000 told the media that 
+                                                                                      # people of India would take to the streets .\n'
+                                                                                      # NOTICE the <target> entity </target> sequence which marks the surface mention of the entity.
+                                                                                      # NOTICE the format of each sentence_dict is [title, sfm_mention, entity, prev_sentence, curr_sentence, next_sentence]
+                                                                                      # i.e it has 6 entires. 
     #dev_bags   = joblib.load(config_obj.bag_file)
     #test_bags  = joblib.load(config_obj.bag_file)
     dev_bags = train_bags

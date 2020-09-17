@@ -14,8 +14,8 @@ def get_parent(ind,x):
 def get_parent_child_tensors(typenet_matrix):
     parent_ids = []
     child_ids = []
-    for child_id in range(typenet_matrix.shape[0]):
-        for parent_id in np.where(typenet_matrix[child_id] == 1)[0]:
+    for child_id in range(typenet_matrix.shape[0]): # iterate over rows
+        for parent_id in np.where(typenet_matrix[child_id] == 1)[0]: # parent_id is an np.array with indices which are 1
             if parent_id != child_id:
                 parent_ids.append(parent_id)
                 child_ids.append(child_id)
@@ -80,6 +80,9 @@ def get_cooccur(data):
                 if i != j:
                     cooccur[i,j] += 1
     return cooccur
+
+
+    
 
 
 

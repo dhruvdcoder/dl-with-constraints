@@ -91,8 +91,8 @@ def get_loss_weights(y,config):
     if config.class_imb == 0:
         wts = torch.ones_like(y)
     elif config.class_imb == -1:
-        pc = y.sum(dim=1) + 1.0
-        nc = y.shape[1] - pc + 1.0
+        pc = y.sum(dim=1) + 1.0 # (batch,)
+        nc = y.shape[1] - pc + 1.0 # total classes - pc +1
         wts = (y*((nc/pc).unsqueeze(-1)) + (1-y))
     elif config.class_imb == 1:
         pc = y.sum().item()  + 1.0
@@ -155,6 +155,8 @@ def mix_generators_em(g1,g2,id1):
 
 
 def get_mixer(ds1, ds2, id1 = 0, which_mixer='bm'):
+    # id1 is to show which of ds1 or ds2 is the labelled set
+    # id1=0 means ds1 is labelled.
     #Pdb().set_trace()
     if ds2 is None:
         num_batches1 = math.ceil(len(ds1)/ds1.batch_size)

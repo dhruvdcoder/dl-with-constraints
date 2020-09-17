@@ -253,15 +253,25 @@ def process(vocab_dict, tokens, flag_wiki = False, encoder = "rnn_phrase"):
     '''
 
     def process_tokens(tokens):
+        """
+        Removes useless tokens like <em>, </em> etc. Also separates out mention tokens which are glued together using underscore.
+
+        Note:
+            Still leaves the <target> and </target> around the mention.
+
+        Args:
+            tokens (List[str]): Sentence containing mention as a list of tokens (space separated)
+
+        """
         p_tokens = []
         i = 0
         while i < len(tokens):
             tok = tokens[i]
             if tok == "<target>":
                 p_tokens.append(tok)
-                p_tokens += tokens[i+1].split("_")
+                p_tokens += tokens[i+1].split("_") # tokens of the mention are glued together using _
                 i += 1
-            elif tok not in skip_tokens:
+            elif tok not in skip_tokens: # skip {"<em>", "</em>", ...}
                 p_tokens.append(tok)
             i += 1
         return p_tokens
@@ -308,6 +318,7 @@ def process(vocab_dict, tokens, flag_wiki = False, encoder = "rnn_phrase"):
             [getid(tok) for tok in sfm_mention], position_left + position_mention + position_right, [i], [j-2]
 
     else:
+        # notice <target> and </target> are still inside tokens in this return unlike the one above. Possibly a bug.
         return [getid(tok) for tok in tokens], \
             [getid(tok) for tok in sfm_mention], [getid(tok) for tok in tokens], -1, -1
 
@@ -607,15 +618,16 @@ def MILtransformer(all_mentions, vocab_dict, entity_dict, cross_wikis, embedding
     for curr_data in subsampled_bag:
         data = {}
         curr_sentence, gold_mention, gold_ent = get_curr_sentence(curr_data)
-        gold_ent     = gold_ent[7:-4]
-        gold_mention = " ".join(gold_mention[9:].split("_"))
-        sentence, sfm_mention, position_embedding, st_id, en_id = process(vocab_dict, curr_sentence, flag_wiki=True, encoder = encoder_type)
+        gold_ent     = gold_ent[7:-4] # e_slug_<entity-name>
+        gold_mention = " ".join(gold_mention[9:].split("_"))#sfm_slug_<mention-with-space-replaced-with-underscore>
 
+        sentence, sfm_mention, position_embedding, st_id, en_id = process(vocab_dict, curr_sentence, flag_wiki=True, encoder = encoder_type)
+        # hierarchy =None and cross_wikis ={}, get_candidates() does not do anything but just returns all_candidates=[gold_ent], priors = [0.0], gold_id=[1]
         all_candidates, priors, gold_id = get_candidates(getLnrm(gold_mention, pattern), entity_dict, gold_ent, cross_wikis, train,None)
 
-        mention_representation = np.array([embeddings[_id] for _id in sfm_mention]).mean(axis = 0)
+        mention_representation = np.array([embeddings[_id] for _id in sfm_mention]).mean(axis = 0) # vector lookup an pooling should be inside the model
         data['mention_representation'] = mention_representation
-        data['context'] = sentence
+        data['context'] = sentence # mention_representation is a vector but context is still a list of token ids
         data['position_embeddings'] = position_embedding
         data['st_ids'] = st_id
         data['en_ids'] = en_id

@@ -3,7 +3,7 @@ import os
 class Config_MIL:
     ''' Neural net hyperparameters '''
 
-    gpu=True
+    gpu=False
     mention_rep = True
 
 
